@@ -1,0 +1,982 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FDC Anomaly Monitor</title>
+<!-- 외부 리소스 없음: 인터넷이 차단된 팹 네트워크에서도 동작 -->
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --surface-2: #f3f2ee;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11,11,11,0.10);
+  --s-mad: #2a78d6;
+  --s-roll: #eb6834;
+  --s-cusum: #1baf7a;
+  --st-good: #0ca30c;
+  --st-warn: #fab219;
+  --st-serious: #ec835a;
+  --st-crit: #d03b3b;
+  --good-ink: #006300;
+  --accent: #2a78d6;
+  --band: rgba(137,135,129,0.16);
+  --shadow: 0 8px 32px rgba(11,11,11,0.12);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232321;
+    --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --s-mad: #3987e5; --s-roll: #d95926; --s-cusum: #199e70;
+    --good-ink: #0ca30c; --accent: #3987e5; --band: rgba(195,194,183,0.12);
+    --shadow: 0 8px 32px rgba(0,0,0,0.5);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232321;
+  --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+  --s-mad: #3987e5; --s-roll: #d95926; --s-cusum: #199e70;
+  --good-ink: #0ca30c; --accent: #3987e5; --band: rgba(195,194,183,0.12);
+  --shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--page); color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+}
+button { font: inherit; color: inherit; }
+.mono, .num { font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+.ink2 { color: var(--ink-2); }
+
+/* header */
+header {
+  position: sticky; top: 0; z-index: 10; background: var(--page);
+  border-bottom: 1px solid var(--border);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 24px;
+}
+.brand { font-weight: 650; font-size: 16px; margin-right: auto; display: flex; align-items: center; gap: 10px; }
+.live { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 400; color: var(--ink-2); }
+.live i { width: 8px; height: 8px; border-radius: 50%; background: var(--st-good); }
+.live.stale i { background: var(--st-crit); }
+.btn {
+  border: 1px solid var(--border); background: var(--surface); border-radius: 8px;
+  padding: 6px 12px; cursor: pointer; white-space: nowrap;
+}
+.btn:hover { background: var(--surface-2); }
+.btn.primary { background: var(--accent); color: #fff; border-color: transparent; }
+.btn.primary:disabled { opacity: .5; cursor: default; }
+.btn.on { border-color: var(--accent); color: var(--accent); }
+.btn.sm { padding: 3px 10px; font-size: 13px; }
+
+main { padding: 20px 24px 40px; max-width: 1600px; margin: 0 auto; }
+.shell { container-type: inline-size; }
+:root { --chat-w: 0px; }
+html.chat-docked { --chat-w: 420px; }
+html.chat-docked body { padding-right: var(--chat-w); }
+
+/* KPI */
+.kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-bottom: 20px; }
+.tile { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+.tile .label { font-size: 12px; color: var(--ink-2); display: flex; align-items: center; gap: 6px; }
+.tile .value { font-size: 28px; font-weight: 600; margin-top: 2px; }
+.tile .sub { font-size: 12px; color: var(--muted); }
+
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 20px; align-items: start; }
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+.panel > h2 { font-size: 13px; font-weight: 600; margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between; }
+
+/* equipment groups */
+.group { margin-bottom: 20px; }
+.group-head { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; flex-wrap: wrap; }
+.group-head h3 { font-size: 15px; margin: 0; }
+.mv { font-size: 12px; color: var(--ink-2); }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+.card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px;
+  cursor: pointer; text-align: left; display: block; width: 100%; position: relative;
+}
+.card:hover { border-color: var(--axis); }
+.card.sel { outline: 2px solid var(--accent); outline-offset: -1px; }
+.card.WARNING { box-shadow: inset 3px 0 0 var(--st-warn); }
+.card.ALARM { box-shadow: inset 3px 0 0 var(--st-crit); }
+.card .top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.card .sid { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card .desc { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card .val-row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-top: 4px; }
+.card .val { font-size: 22px; font-weight: 600; }
+.card .spec { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.card .val small { font-size: 12px; font-weight: 400; color: var(--ink-2); margin-left: 3px; }
+.card svg.spark { display: block; width: 100%; height: 40px; margin: 4px 0 2px; }
+.card .reasons { font-size: 12px; color: var(--ink-2); min-height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fault-tag { font-size: 11px; color: var(--muted); border: 1px dashed var(--axis); border-radius: 6px; padding: 0 5px; }
+
+.pill { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; border-radius: 999px;
+  padding: 1px 8px 1px 6px; white-space: nowrap; border: 1px solid var(--border); color: var(--ink); background: var(--surface-2); }
+.pill svg { width: 12px; height: 12px; }
+
+/* events */
+.events { max-height: 520px; overflow: auto; }
+.ev { display: grid; grid-template-columns: 62px 1fr; gap: 2px 10px; padding: 8px 16px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.ev:hover { background: var(--surface-2); }
+.ev .t { font-size: 12px; color: var(--muted); }
+.ev .what { font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
+.ev .why { grid-column: 2; font-size: 12px; color: var(--ink-2); }
+.empty { padding: 20px 16px; color: var(--muted); font-size: 13px; }
+.side { display: grid; gap: 16px; position: sticky; top: 72px; }
+
+/* drawer: 화면 밖 drawer가 가로 스크롤을 만들지 않도록 고정 컨테이너로 클리핑 */
+#drawerWrap { position: fixed; inset: 0 var(--chat-w) 0 0; overflow: hidden; pointer-events: none; z-index: 20; }
+#drawerWrap.open { pointer-events: auto; }
+.scrim { position: absolute; inset: 0; background: rgba(0,0,0,.25); z-index: 20; display: none; }
+.drawer {
+  position: absolute; top: 0; right: 0; bottom: 0; width: min(760px, 100%); z-index: 21;
+  background: var(--surface); border-left: 1px solid var(--border); box-shadow: var(--shadow);
+  overflow-y: auto; transform: translateX(100%); transition: transform .18s ease;
+}
+#drawerWrap.open .scrim { display: block; }
+#drawerWrap.open .drawer { transform: none; }
+.d-head { display: flex; gap: 12px; align-items: flex-start; padding: 16px 20px; border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; background: var(--surface); z-index: 2; }
+.d-head h2 { margin: 0; font-size: 17px; }
+.d-head .meta { font-size: 12px; color: var(--ink-2); }
+.d-body { padding: 16px 20px 32px; display: grid; gap: 20px; }
+.section h4 { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+.chart { position: relative; }
+.chart svg { display: block; width: 100%; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--ink-2); margin-bottom: 6px; }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.tip {
+  position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--border);
+  box-shadow: var(--shadow); border-radius: 8px; padding: 6px 10px; font-size: 12px; white-space: nowrap; display: none; z-index: 3;
+}
+.tip b { font-weight: 600; }
+.stats { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
+.stat { background: var(--surface-2); border-radius: 8px; padding: 8px 10px; }
+.stat .k { font-size: 11px; color: var(--ink-2); }
+.stat .v { font-size: 15px; font-weight: 600; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+th { font-weight: 600; color: var(--ink-2); font-size: 12px; }
+td.num, th.num { text-align: right; }
+.faults { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+textarea {
+  width: 100%; min-height: 64px; resize: vertical; font: inherit; color: var(--ink); background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+}
+.analysis { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; display: grid; gap: 10px; }
+.analysis p { margin: 0; }
+.analysis ol, .analysis ul { margin: 0; padding-left: 20px; }
+.analysis li { margin: 3px 0; }
+.err { color: var(--st-crit); font-size: 13px; }
+details.table-view summary { cursor: pointer; font-size: 12px; color: var(--ink-2); }
+.tv { max-height: 240px; overflow: auto; margin-top: 6px; }
+
+/* MCP popover */
+.pop { position: absolute; right: 24px; top: 52px; width: min(520px, calc(100vw - 32px)); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); padding: 14px 16px; display: none; z-index: 30; }
+.pop.show { display: block; }
+.pop h4 { margin: 0 0 6px; font-size: 13px; }
+.pop pre { margin: 4px 0 12px; background: var(--surface-2); border-radius: 8px; padding: 8px 10px; font-size: 12px;
+  overflow-x: auto; white-space: pre; }
+.pop ul { margin: 0; padding-left: 18px; font-size: 12px; color: var(--ink-2); }
+
+@container (max-width: 1000px) {
+  .layout { grid-template-columns: minmax(0, 1fr); }
+  .side { position: static; }
+  .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@container (max-width: 600px) {
+  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* chat panel */
+.chat {
+  position: fixed; top: 0; right: 0; bottom: 0; width: var(--chat-w); z-index: 15;
+  background: var(--surface); border-left: 1px solid var(--border); display: none; flex-direction: column;
+}
+html.chat-docked .chat { display: flex; }
+.chat-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.chat-head .t { font-weight: 600; }
+.chat-head .m { font-size: 11px; color: var(--muted); margin-right: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-log { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 14px; }
+.msg { font-size: 14px; line-height: 1.55; overflow-wrap: anywhere; }
+.msg.user { align-self: flex-end; max-width: 88%; background: var(--surface-2); border-radius: 12px 12px 4px 12px; padding: 8px 12px; white-space: pre-wrap; }
+.msg.bot { align-self: stretch; }
+.msg.bot p { margin: 0 0 8px; }
+.msg.bot p:last-child { margin-bottom: 0; }
+.msg.bot h3, .msg.bot h4 { font-size: 14px; margin: 10px 0 4px; }
+.msg.bot ul, .msg.bot ol { margin: 0 0 8px; padding-left: 20px; }
+.msg.bot li { margin: 2px 0; }
+.msg.bot code { font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; background: var(--surface-2); border-radius: 4px; padding: 0 4px; }
+.msg.bot pre { background: var(--surface-2); border-radius: 8px; padding: 8px 10px; overflow-x: auto; font-size: 12px; }
+.msg.bot pre code { background: none; padding: 0; }
+.msg.bot table { font-size: 12.5px; margin: 4px 0 8px; display: block; overflow-x: auto; }
+.msg.bot th, .msg.bot td { padding: 4px 8px; }
+.msg.err { color: var(--st-crit); font-size: 13px; }
+.sid-link { color: var(--accent); cursor: pointer; text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent); text-underline-offset: 2px; }
+.tool { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); background: var(--surface-2);
+  border-radius: 8px; padding: 4px 10px; margin: 4px 0; width: fit-content; max-width: 100%; }
+.tool .arg { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool i { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--axis); }
+.tool.run i { background: var(--accent); animation: pulse 1s infinite; }
+.tool.ok i { background: var(--st-good); }
+.tool.fail i { background: var(--st-crit); }
+@keyframes pulse { 50% { opacity: .3; } }
+.typing { color: var(--muted); font-size: 13px; }
+.suggest { display: grid; gap: 8px; }
+.suggest .hint { font-size: 13px; color: var(--ink-2); margin-bottom: 2px; }
+.suggest button { text-align: left; border: 1px solid var(--border); background: var(--surface); border-radius: 10px; padding: 8px 12px; cursor: pointer; font-size: 13px; }
+.suggest button:hover { background: var(--surface-2); }
+.chat-input { border-top: 1px solid var(--border); padding: 10px 12px 12px; display: grid; gap: 6px; }
+.chat-input .ctx { font-size: 12px; color: var(--muted); min-height: 16px; }
+.chat-input .row { display: flex; gap: 8px; align-items: flex-end; }
+.chat-input textarea { min-height: 42px; max-height: 160px; flex: 1; }
+.chat-fab { position: fixed; right: 16px; bottom: 16px; z-index: 14; border-radius: 999px; padding: 10px 16px; box-shadow: var(--shadow); }
+html.chat-docked .chat-fab { display: none; }
+@media (max-width: 900px) {
+  html.chat-docked { --chat-w: 100vw; }
+  html.chat-docked body { padding-right: 0; overflow: hidden; }
+  .chat { z-index: 25; }
+}
+@media (max-width: 640px) {
+  header, main { padding-left: 16px; padding-right: 16px; }
+  .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .d-head, .d-body { padding-left: 16px; padding-right: 16px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">FDC Anomaly Monitor <span id="live" class="live"><i></i><span id="liveText">연결 중…</span></span></div>
+  <span id="simCtl" style="display:none; gap:8px; align-items:center; flex-wrap:wrap" class="ink2">
+    <span style="font-size:12px">시뮬레이터</span>
+    <button class="btn sm" id="btnRun"></button>
+    <button class="btn sm" id="btnAuto" title="주기적으로 임의 센서에 이상 패턴 주입"></button>
+    <button class="btn sm" id="btnClear">고장 해제</button>
+  </span>
+  <button class="btn sm" id="btnChat">채팅</button>
+  <button class="btn sm" id="btnMcp">MCP 연결</button>
+  <button class="btn sm" id="btnTheme" title="테마 전환">테마</button>
+  <div class="pop" id="mcpPop">
+    <h4>Claude Code</h4>
+    <pre id="mcpCmd"></pre>
+    <h4>Claude Desktop / 기타 MCP 클라이언트</h4>
+    <pre id="mcpJson"></pre>
+    <h4>이 대시보드와 공유되는 주요 MCP tool</h4>
+    <ul>
+      <li><b>get_monitor_status</b>, <b>list_alarm_events</b> — 대시보드와 같은 상태·이벤트 조회</li>
+      <li><b>check_sensor</b>, <b>detect_multivariate</b>, <b>analyze_with_claude</b> — 상세 조사 및 원인 분석</li>
+      <li><b>ingest_readings</b> — 넣은 데이터가 이 화면에 바로 반영</li>
+    </ul>
+  </div>
+</header>
+
+<div class="shell">
+<main>
+  <section class="kpis" id="kpis"></section>
+  <div class="layout">
+    <section id="groups"></section>
+    <aside class="side">
+      <div class="panel">
+        <h2>알람 이벤트 <span class="muted" style="font-weight:400" id="evCount"></span></h2>
+        <div class="events" id="events"></div>
+      </div>
+      <div class="panel">
+        <h2>최근 Claude 분석</h2>
+        <div id="analyses"></div>
+      </div>
+      <div class="panel" id="faultPanel" style="display:none">
+        <h2>주입된 고장 (시뮬레이터)</h2>
+        <div id="faultLog"></div>
+      </div>
+    </aside>
+  </div>
+</main>
+</div>
+
+<aside class="chat" id="chat" aria-label="대시보드 채팅">
+  <div class="chat-head">
+    <span class="t">FDC 어시스턴트</span>
+    <span class="m" id="chatMeta"></span>
+    <button class="btn sm" id="chatNew">새 대화</button>
+    <button class="btn sm" id="chatClose" aria-label="채팅 닫기">닫기</button>
+  </div>
+  <div class="chat-log" id="chatLog"></div>
+  <form class="chat-input" id="chatForm">
+    <div class="ctx" id="chatCtx"></div>
+    <div class="row">
+      <textarea id="chatText" rows="1" placeholder="대시보드 데이터에 대해 물어보세요" title="Enter 전송 · Shift+Enter 줄바꿈"></textarea>
+      <button class="btn primary" id="chatSend" type="submit">전송</button>
+    </div>
+  </form>
+</aside>
+<button class="btn chat-fab" id="chatFab">채팅 열기</button>
+
+<div id="drawerWrap">
+  <div class="scrim" id="scrim"></div>
+  <aside class="drawer" id="drawer" aria-label="센서 상세">
+    <div class="d-head">
+      <div style="flex:1; min-width:0">
+        <h2 id="dTitle"></h2>
+        <div class="meta" id="dMeta"></div>
+      </div>
+      <span id="dPill"></span>
+      <button class="btn sm" id="dClose" aria-label="닫기">닫기</button>
+    </div>
+    <div class="d-body" id="dBody"></div>
+  </aside>
+</div>
+
+<script>
+"use strict";
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const NS = "http://www.w3.org/2000/svg";
+const hms = t => t ? String(t).slice(11, 19) : "";
+
+const STATUS = {
+  OK:      { color: "var(--st-good)", label: "정상", icon: '<svg viewBox="0 0 12 12"><circle cx="6" cy="6" r="5.5" fill="var(--st-good)"/><path d="M3.4 6.2 5.2 8l3.4-3.6" stroke="#fff" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>' },
+  WARNING: { color: "var(--st-warn)", label: "경고", icon: '<svg viewBox="0 0 12 12"><path d="M6 .8 11.4 10.8H.6Z" fill="var(--st-warn)"/><path d="M6 4.4v3" stroke="#0b0b0b" stroke-width="1.4" stroke-linecap="round"/><circle cx="6" cy="9.1" r=".8" fill="#0b0b0b"/></svg>' },
+  ALARM:   { color: "var(--st-crit)", label: "알람", icon: '<svg viewBox="0 0 12 12"><rect x=".5" y=".5" width="11" height="11" rx="2.5" fill="var(--st-crit)"/><path d="M6 3v3.6" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/><circle cx="6" cy="8.8" r=".9" fill="#fff"/></svg>' },
+};
+const pill = s => `<span class="pill">${STATUS[s].icon}${STATUS[s].label}</span>`;
+const SEV = { normal: ["OK", "정상"], low: ["OK", "낮음"], medium: ["WARNING", "보통"], high: ["ALARM", "높음"], critical: ["ALARM", "심각"] };
+const sevPill = sev => { const [s, l] = SEV[sev] || ["WARNING", sev || "?"]; return `<span class="pill">${STATUS[s].icon}${esc(l)}</span>`; };
+const METHOD = {
+  mad:            { label: "MAD (spike)",      color: "var(--s-mad)",   shape: "circle" },
+  rolling_zscore: { label: "Rolling Z (국소 spike)", color: "var(--s-roll)",  shape: "triangle" },
+  cusum:          { label: "CUSUM (drift)",    color: "var(--s-cusum)", shape: "square" },
+};
+const FAULT_KO = { spike: "Spike", drift: "Drift", shift: "Shift", stuck: "Stuck", noise: "Noise" };
+
+function fmt(v, ref) {
+  if (v == null || isNaN(v)) return "–";
+  const a = Math.abs(ref ?? v);
+  const d = a >= 1000 ? 0 : a >= 100 ? 1 : a >= 10 ? 2 : 3;
+  return Number(v).toLocaleString("ko-KR", { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+
+/* ---------------- theme ---------------- */
+(function initTheme() {
+  let t = null; try { t = localStorage.getItem("theme"); } catch (e) {}
+  if (t) document.documentElement.dataset.theme = t;
+  $("#btnTheme").onclick = () => {
+    const cur = document.documentElement.dataset.theme ||
+      (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    const next = cur === "dark" ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem("theme", next); } catch (e) {}
+    if (detail) drawDetail(detail);
+  };
+})();
+
+/* ---------------- MCP popover ---------------- */
+{
+  const url = location.origin + "/mcp";
+  $("#mcpCmd").textContent = `claude mcp add --transport http anomaly ${url}`;
+  $("#mcpJson").textContent = JSON.stringify({ mcpServers: { anomaly: { type: "http", url } } }, null, 2);
+  $("#btnMcp").onclick = e => { e.stopPropagation(); $("#mcpPop").classList.toggle("show"); };
+  document.addEventListener("click", e => { if (!$("#mcpPop").contains(e.target)) $("#mcpPop").classList.remove("show"); });
+}
+
+/* ---------------- API ---------------- */
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+
+/* ---------------- overview ---------------- */
+let overview = null, selected = null, detail = null;
+
+function spark(vals, status) {
+  if (!vals || vals.length < 2) return "";
+  const w = 240, h = 40, p = 3;
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (hi - lo < 1e-12) { lo -= 1; hi += 1; }
+  const x = i => p + i * (w - 2 * p) / (vals.length - 1);
+  const y = v => h - p - (v - lo) / (hi - lo) * (h - 2 * p);
+  const d = vals.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join("");
+  const lx = x(vals.length - 1), ly = y(vals[vals.length - 1]);
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
+    <path d="${d}" fill="none" stroke="var(--ink-2)" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>
+    <circle cx="${lx}" cy="${ly}" r="3" fill="${STATUS[status].color}" stroke="var(--surface)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  </svg>`;
+}
+
+function renderOverview(o) {
+  const s = o.summary, total = s.OK + s.WARNING + s.ALARM;
+  const mvWarn = Object.values(o.equipment).filter(e => e.status !== "OK").length;
+  const tile = (label, value, sub) => `<div class="tile"><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
+  $("#kpis").innerHTML =
+    tile("감시 중인 센서", total, `평가 구간 최근 ${o.window} 샘플`) +
+    tile(`${STATUS.ALARM.icon.replace("<svg", '<svg width="12" height="12"')} 알람`, s.ALARM, "스펙(LSL/USL) 이탈") +
+    tile(`${STATUS.WARNING.icon.replace("<svg", '<svg width="12" height="12"')} 경고`, s.WARNING, "통계적 이상 탐지") +
+    tile(`${STATUS.OK.icon.replace("<svg", '<svg width="12" height="12"')} 정상`, s.OK, total ? `${Math.round(s.OK / total * 100)}% 정상 가동` : "") +
+    tile("다변량 이상 설비", mvWarn, `Claude: ${o.claude.available ? esc(o.claude.model) : "API 키 미설정"}`);
+
+  // group by equipment/chamber
+  const groups = {};
+  for (const x of o.sensors) (groups[`${x.equipment || "-"}/${x.chamber || "-"}`] ||= []).push(x);
+  const active = o.simulator ? o.simulator.active_faults : {};
+  $("#groups").innerHTML = Object.entries(groups).map(([key, list]) => {
+    const eq = o.equipment[key];
+    const mv = eq ? (eq.status === "OK"
+      ? `다변량 정상`
+      : `${STATUS.WARNING.icon.replace("<svg", '<svg width="12" height="12" style="vertical-align:-1px"')} 다변량 이상 ${eq.anomaly_count}건 · 주요 기여 ${esc(eq.top_contributors.slice(0, 2).join(", "))}`) : "";
+    return `<div class="group">
+      <div class="group-head"><h3>${key === "-/-" ? "설비 미지정" : esc(key.replace("/", " · "))}</h3><span class="mv">${mv}</span></div>
+      <div class="cards">${list.map(x => `
+        <button class="card ${x.status} ${x.sensor_id === selected ? "sel" : ""}" data-sid="${esc(x.sensor_id)}">
+          <div class="top"><span class="sid" title="${esc(x.sensor_id)}">${esc(x.sensor_id)}</span>${pill(x.status)}</div>
+          <div class="desc">${esc(x.description || "") || "&nbsp;"}</div>
+          <div class="val-row"><span class="val num">${fmt(x.last_value)}<small>${esc(x.unit)}</small></span>
+            ${x.lsl != null || x.usl != null ? `<span class="spec num">스펙 ${fmt(x.lsl, x.usl)}–${fmt(x.usl)}</span>` : ""}</div>
+          ${spark(x.spark, x.status)}
+          <div class="reasons">${x.reasons.length ? esc(x.reasons.join(" · ")) : '<span class="muted">이상 없음</span>'}
+            ${active[x.sensor_id] ? `<span class="fault-tag">주입: ${FAULT_KO[active[x.sensor_id].kind]}</span>` : ""}</div>
+        </button>`).join("")}
+      </div></div>`;
+  }).join("") || '<div class="panel empty">등록된 센서가 없습니다. MCP의 register_sensor / ingest_readings로 데이터를 넣으세요.</div>';
+
+  // events
+  $("#evCount").textContent = o.events.length ? `${o.events.length}건` : "";
+  $("#events").innerHTML = o.events.map(e => `
+    <div class="ev" data-sid="${e.scope === "sensor" ? esc(e.target) : ""}">
+      <span class="t num">${hms(e.time)}</span>
+      <span class="what">${pill(e.to)} <b>${esc(e.target)}</b></span>
+      <span class="why">${e.to === "OK" ? `${STATUS[e.from].label} 해제` : (e.scope === "equipment" ? "다변량 · " : "") + esc(e.reasons.join(" · "))}</span>
+    </div>`).join("") || '<div class="empty">아직 이벤트가 없습니다.</div>';
+
+  $("#analyses").innerHTML = o.analyses.map(a => `
+    <div class="ev" data-sid="${esc(a.sensor_id || "")}">
+      <span class="t num">${hms(a.time)}</span>
+      <span class="what">${sevPill(a.severity)} <b>${esc(a.sensor_id || "(직접 입력)")}</b></span>
+    </div>`).join("") || '<div class="empty">센서 상세에서 “Claude 원인 분석”을 실행하거나, MCP로 analyze_with_claude를 호출하면 여기에 표시됩니다.</div>';
+
+  // simulator
+  const sim = o.simulator;
+  $("#simCtl").style.display = sim ? "inline-flex" : "none";
+  $("#faultPanel").style.display = sim ? "" : "none";
+  if (sim) {
+    $("#btnRun").textContent = sim.running ? "일시정지" : "재개";
+    $("#btnAuto").textContent = sim.auto_fault_every ? `자동 고장 ${sim.auto_fault_every}s` : "자동 고장 꺼짐";
+    $("#btnAuto").classList.toggle("on", !!sim.auto_fault_every);
+    $("#faultLog").innerHTML = sim.fault_log.slice(0, 8).map(f => `
+      <div class="ev" data-sid="${esc(f.sensor_id)}">
+        <span class="t num">${hms(f.time)}</span>
+        <span class="what"><b>${FAULT_KO[f.kind]}</b> → ${esc(f.sensor_id)}</span>
+        <span class="why">${f.source === "auto" ? "자동" : "수동"} · ${f.duration} 샘플</span>
+      </div>`).join("") || '<div class="empty">주입된 고장이 없습니다.</div>';
+  }
+}
+
+async function refresh() {
+  try {
+    overview = await api("/api/overview");
+    renderOverview(overview);
+    updateChatMeta();
+    $("#live").classList.remove("stale");
+    $("#liveText").textContent = "실시간 · " + new Date().toLocaleTimeString("ko-KR", { hour12: false });
+  } catch (e) {
+    $("#live").classList.add("stale");
+    $("#liveText").textContent = "서버 연결 끊김";
+  }
+  if (selected) loadDetail(selected);
+}
+
+document.addEventListener("click", e => {
+  const el = e.target.closest("[data-sid]");
+  if (el && el.dataset.sid && !e.target.closest(".drawer")) openDetail(el.dataset.sid);
+});
+$("#btnRun").onclick = () => api("/api/simulator", { action: overview.simulator.running ? "pause" : "start" }).then(refresh);
+$("#btnAuto").onclick = () => api("/api/simulator", { action: "auto", auto_fault_every: overview.simulator.auto_fault_every ? null : 150 }).then(refresh);
+$("#btnClear").onclick = () => api("/api/simulator", { action: "clear" }).then(refresh);
+
+/* ---------------- detail drawer ---------------- */
+let analyzing = false, analyzeError = "";
+
+function openDetail(sid) {
+  if (selected !== sid) { analyzeError = ""; detail = null; $("#dBody").innerHTML = '<div class="muted">불러오는 중…</div>'; }
+  selected = sid;
+  if (innerWidth <= 900 && document.documentElement.classList.contains("chat-docked")) setChatOpen(false);  // 모바일: 채팅이 전체 화면
+  history.replaceState(null, "", "#s=" + encodeURIComponent(sid));
+  updateChatMeta();
+  $("#drawerWrap").classList.add("open");
+  document.querySelectorAll(".card").forEach(c => c.classList.toggle("sel", c.dataset.sid === sid));
+  loadDetail(sid);
+}
+function closeDetail() {
+  selected = null; detail = null;
+  history.replaceState(null, "", location.pathname + location.search);
+  updateChatMeta();
+  $("#drawerWrap").classList.remove("open");
+  document.querySelectorAll(".card.sel").forEach(c => c.classList.remove("sel"));
+}
+$("#scrim").onclick = closeDetail;
+$("#dClose").onclick = closeDetail;
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeDetail(); });
+
+async function loadDetail(sid) {
+  try {
+    const d = await api("/api/sensors/" + encodeURIComponent(sid));
+    if (sid !== selected) return;
+    detail = d;
+    drawDetail(d);
+  } catch (e) {
+    $("#dBody").innerHTML = `<div class="err">${esc(e.message)}</div>`;
+  }
+}
+
+function drawDetail(d) {
+  const m = d.sensor, c = d.check, st = (d.monitor && d.monitor.status) || (c && c.status) || "OK";
+  $("#dTitle").textContent = m.sensor_id;
+  $("#dMeta").textContent = [m.equipment, m.chamber, m.description, m.unit && `단위 ${m.unit}`].filter(Boolean).join(" · ");
+  $("#dPill").innerHTML = pill(st);
+
+  const body = $("#dBody");
+  // 처음 한 번만 골격을 만들고 이후엔 내용만 갱신 (textarea 입력 유지)
+  if (!body.dataset.sid || body.dataset.sid !== m.sensor_id || !$("#chartBox", body)) {
+    body.dataset.sid = m.sensor_id;
+    body.innerHTML = `
+      <div class="section">
+        <h4>최근 ${d.values.length} 샘플 추세</h4>
+        <div class="legend" id="legend"></div>
+        <div class="chart" id="chartBox"><div class="tip" id="tip"></div></div>
+        <details class="table-view"><summary>데이터 표로 보기 (이상 샘플)</summary><div class="tv" id="tv"></div></details>
+      </div>
+      <div class="section"><h4>통계 · 공정능력</h4><div class="stats" id="stats"></div></div>
+      <div class="section"><h4>탐지기 결과 <span class="muted" style="font-weight:400">(상시 감시 threshold 적용)</span></h4><div id="methods"></div></div>
+      <div class="section" id="simSec"><h4>이상 패턴 주입 <span class="muted" style="font-weight:400">(데모 시뮬레이터)</span></h4>
+        <div class="faults" id="faultBtns"></div></div>
+      <div class="section"><h4>Claude 원인 분석</h4>
+        <textarea id="ctx" placeholder="추가 맥락 (선택): 최근 PM 이력, 레시피 변경, 동일 설비의 다른 알람 등 — 분석 품질이 크게 올라갑니다."></textarea>
+        <div style="display:flex; gap:10px; align-items:center; margin-top:8px">
+          <button class="btn primary" id="btnAnalyze">Claude 원인 분석</button><span class="muted" id="anMsg" style="font-size:12px"></span>
+        </div>
+        <div id="analysisBox" style="margin-top:12px"></div>
+      </div>`;
+    $("#btnAnalyze").onclick = runAnalysis;
+  }
+  if (!c) { $("#chartBox").innerHTML = '<div class="muted">데이터가 부족합니다.</div>'; return; }
+
+  drawChart($("#chartBox"), d);
+
+  // stats + Cpk
+  const s = c.stats;
+  let cpk = null;
+  if (s.std > 0 && (m.lsl != null || m.usl != null)) {
+    const parts = [];
+    if (m.usl != null) parts.push((m.usl - s.mean) / (3 * s.std));
+    if (m.lsl != null) parts.push((s.mean - m.lsl) / (3 * s.std));
+    cpk = Math.min(...parts);
+  }
+  const stat = (k, v) => `<div class="stat"><div class="k">${k}</div><div class="v num">${v}</div></div>`;
+  $("#stats").innerHTML = stat("현재값", fmt(d.values[d.values.length - 1], s.mean)) + stat("평균", fmt(s.mean)) +
+    stat("표준편차", fmt(s.std, s.mean / 100)) + stat("최소", fmt(s.min, s.mean)) + stat("최대", fmt(s.max, s.mean)) +
+    stat("Cpk", cpk == null ? "–" : cpk.toFixed(2));
+
+  // methods table
+  const rows = Object.entries(c.results).map(([k, r]) => {
+    const last = r.anomalies && r.anomalies.length ? r.anomalies[r.anomalies.length - 1] : null;
+    return `<tr><td>${esc(METHOD[k] ? METHOD[k].label : k === "stuck" ? "Stuck (값 고정)" : k)}</td>
+      <td class="num">${r.threshold ?? "–"}</td><td class="num">${r.error ? esc(r.error) : r.anomaly_count}</td>
+      <td class="num">${last ? hms(last.timestamp) : "–"}</td></tr>`;
+  });
+  rows.push(`<tr><td>Spec (LSL/USL)</td><td class="num">${fmt(m.lsl, m.usl)} / ${fmt(m.usl)}</td>
+    <td class="num">${c.spec_violations.length}</td>
+    <td class="num">${c.spec_violations.length ? hms(c.spec_violations[c.spec_violations.length - 1].timestamp) : "–"}</td></tr>`);
+  $("#methods").innerHTML = `<table><thead><tr><th>탐지기</th><th class="num">Threshold</th><th class="num">이상 수</th><th class="num">마지막 탐지</th></tr></thead>
+    <tbody>${rows.join("")}</tbody></table>`;
+
+  // table view of anomalous samples
+  const flagged = new Map();
+  for (const [k, r] of Object.entries(c.results)) for (const a of r.anomalies || []) {
+    const row = flagged.get(a.index) || []; row.push(k); flagged.set(a.index, row);
+  }
+  for (const a of c.spec_violations) { const row = flagged.get(a.index) || []; row.push("spec"); flagged.set(a.index, row); }
+  const idx = [...flagged.keys()].sort((a, b) => b - a).slice(0, 200);
+  $("#tv").innerHTML = idx.length ? `<table><thead><tr><th>시각</th><th class="num">값</th><th>탐지기</th></tr></thead><tbody>${
+    idx.map(i => `<tr><td class="num">${hms(d.timestamps[i])}</td><td class="num">${fmt(d.values[i], s.mean)}</td><td>${esc(flagged.get(i).join(", "))}</td></tr>`).join("")
+  }</tbody></table>` : '<div class="muted" style="font-size:12px">이상 샘플 없음</div>';
+
+  // simulator buttons
+  const sim = overview && overview.simulator;
+  $("#simSec").style.display = sim ? "" : "none";
+  if (sim) {
+    const af = sim.active_faults[m.sensor_id];
+    $("#faultBtns").innerHTML = sim.fault_kinds.map(k => `<button class="btn sm" data-fault="${k}">${FAULT_KO[k]}</button>`).join("") +
+      (af ? `<span class="muted" style="font-size:12px">진행 중: ${FAULT_KO[af.kind]} ${af.elapsed}/${af.duration}</span>` : "");
+    $("#faultBtns").querySelectorAll("[data-fault]").forEach(b => b.onclick = () =>
+      api("/api/simulator", { action: "fault", sensor_id: m.sensor_id, kind: b.dataset.fault }).then(refresh));
+  }
+
+  // analysis
+  $("#btnAnalyze").disabled = analyzing || !(overview && overview.claude.available);
+  $("#anMsg").textContent = analyzing ? "분석 중… (수십 초 걸릴 수 있습니다)" :
+    overview && !overview.claude.available ? ".env에 ANTHROPIC_API_KEY를 설정하면 사용할 수 있습니다." : "";
+  $("#analysisBox").innerHTML = analyzeError ? `<div class="err">${esc(analyzeError)}</div>` : renderAnalysis(d.analysis);
+}
+
+function renderAnalysis(a) {
+  if (!a || !a.analysis) return "";
+  const x = a.analysis;
+  const conf = { low: "낮음", medium: "중간", high: "높음" };
+  return `<div class="analysis">
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">${sevPill(x.severity)}
+      <b>${esc(x.pattern)}</b><span class="muted" style="font-size:12px">${hms(a.time)} 분석${x.likely_sensor_fault ? " · 센서 오류 가능성 높음" : ""}</span></div>
+    <p>${esc(x.summary)}</p>
+    ${x.root_causes && x.root_causes.length ? `<div><h4 style="margin:0 0 4px;font-size:12px">원인 후보</h4><ul>${
+      x.root_causes.map(r => `<li><b>${esc(r.cause)}</b> <span class="muted">(확신도 ${conf[r.confidence] || esc(r.confidence)})</span><br><span class="ink2">${esc(r.evidence)}</span></li>`).join("")}</ul></div>` : ""}
+    ${x.recommended_actions && x.recommended_actions.length ? `<div><h4 style="margin:0 0 4px;font-size:12px">권장 조치</h4><ol>${
+      x.recommended_actions.map(r => `<li>${esc(r)}</li>`).join("")}</ol></div>` : ""}
+  </div>`;
+}
+
+async function runAnalysis() {
+  const sid = selected;
+  analyzing = true; analyzeError = ""; drawDetail(detail);
+  try {
+    await api(`/api/sensors/${encodeURIComponent(sid)}/analyze`, { context: $("#ctx").value });
+  } catch (e) { analyzeError = e.message; }
+  analyzing = false;
+  if (sid === selected) loadDetail(sid);
+  refresh();
+}
+
+/* ---------------- main chart (SVG) ---------------- */
+function niceTicks(lo, hi, n = 5) {
+  const step0 = (hi - lo) / n, mag = Math.pow(10, Math.floor(Math.log10(step0)));
+  const step = [1, 2, 2.5, 5, 10].map(f => f * mag).find(s => s >= step0) || step0;
+  const out = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(+v.toFixed(10));
+  return out;
+}
+
+function el(tag, attrs, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+
+function marker(g, shape, cx, cy, color) {
+  const r = 4.5, ring = { stroke: "var(--surface)", "stroke-width": 2, fill: color };
+  if (shape === "circle") return el("circle", { cx, cy, r, ...ring }, g);
+  if (shape === "square") return el("rect", { x: cx - r, y: cy - r, width: 2 * r, height: 2 * r, rx: 1.5, ...ring }, g);
+  if (shape === "triangle") return el("path", { d: `M${cx},${cy - r - 1}L${cx + r + 1},${cy + r}L${cx - r - 1},${cy + r}Z`, ...ring }, g);
+  if (shape === "diamond") return el("path", { d: `M${cx},${cy - r - 1}L${cx + r + 1},${cy}L${cx},${cy + r + 1}L${cx - r - 1},${cy}Z`, ...ring }, g);
+}
+
+function drawChart(box, d) {
+  const vals = d.values, ts = d.timestamps, m = d.sensor, c = d.check;
+  const W = Math.max(320, box.clientWidth), H = 300, ml = 56, mr = 64, mt = 14, mb = 28;
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (m.lsl != null) lo = Math.min(lo, m.lsl);
+  if (m.usl != null) hi = Math.max(hi, m.usl);
+  if (hi - lo < 1e-12) { lo -= 1; hi += 1; }
+  const pad = (hi - lo) * 0.06; lo -= pad; hi += pad;
+  const n = vals.length;
+  const x = i => ml + (n === 1 ? 0 : i * (W - ml - mr) / (n - 1));
+  const y = v => mt + (hi - v) / (hi - lo) * (H - mt - mb);
+
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, height: H, role: "img", "aria-label": `${m.sensor_id} 추세 차트` });
+  // grid + y axis
+  for (const t of niceTicks(lo, hi)) {
+    el("line", { x1: ml, x2: W - mr, y1: y(t), y2: y(t), stroke: "var(--grid)", "stroke-width": 1 }, svg);
+    const tx = el("text", { x: ml - 8, y: y(t) + 4, "text-anchor": "end", "font-size": 11, fill: "var(--muted)", class: "num" }, svg);
+    tx.textContent = fmt(t, hi);
+  }
+  el("line", { x1: ml, x2: W - mr, y1: H - mb, y2: H - mb, stroke: "var(--axis)" }, svg);
+  // x ticks
+  const nt = Math.max(2, Math.min(6, Math.floor((W - ml - mr) / 110)));
+  for (let k = 0; k <= nt; k++) {
+    const i = Math.round(k * (n - 1) / nt);
+    const tx = el("text", { x: x(i), y: H - 8, "text-anchor": k === 0 ? "start" : k === nt ? "end" : "middle", "font-size": 11, fill: "var(--muted)", class: "num" }, svg);
+    tx.textContent = hms(ts[i]);
+  }
+  // stuck bands
+  for (const a of (c.results.stuck && c.results.stuck.anomalies) || []) {
+    const run = Math.round(a.score);
+    el("rect", { x: x(a.index), y: mt, width: Math.max(2, x(Math.min(n - 1, a.index + run - 1)) - x(a.index)), height: H - mt - mb, fill: "var(--band)" }, svg);
+    const t = el("text", { x: x(a.index) + 4, y: mt + 12, "font-size": 11, fill: "var(--ink-2)" }, svg);
+    t.textContent = "Stuck";
+  }
+  // spec lines
+  for (const [lim, name] of [[m.usl, "USL"], [m.lsl, "LSL"]]) {
+    if (lim == null) continue;
+    el("line", { x1: ml, x2: W - mr, y1: y(lim), y2: y(lim), stroke: "var(--st-crit)", "stroke-width": 1, "stroke-dasharray": "4 4" }, svg);
+    const t = el("text", { x: W - mr + 6, y: y(lim) + 4, "font-size": 11, fill: "var(--ink-2)", class: "num" }, svg);
+    t.textContent = `${name} ${fmt(lim, hi)}`;
+  }
+  // series line
+  el("path", { d: vals.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(""),
+    fill: "none", stroke: "var(--ink-2)", "stroke-width": 1.5, "stroke-linejoin": "round" }, svg);
+  // markers
+  const at = new Map();   // index -> [labels]
+  const add = (i, label) => { const r = at.get(i) || []; r.push(label); at.set(i, r); };
+  const mg = el("g", {}, svg);
+  for (const [k, spec] of Object.entries(METHOD)) {
+    for (const a of (c.results[k] && c.results[k].anomalies) || []) { marker(mg, spec.shape, x(a.index), y(a.value), spec.color); add(a.index, `${spec.label} · score ${a.score}`); }
+  }
+  // 가장 심각한 스펙 이탈을 맨 위에
+  for (const a of c.spec_violations) { marker(mg, "diamond", x(a.index), y(a.value), "var(--st-crit)"); add(a.index, `스펙 이탈 (${a.detail})`); }
+  for (const a of (c.results.stuck && c.results.stuck.anomalies) || []) add(a.index, `Stuck ${Math.round(a.score)} 샘플`);
+  // crosshair
+  const cross = el("line", { y1: mt, y2: H - mb, stroke: "var(--axis)", "stroke-width": 1, visibility: "hidden" }, svg);
+  const dot = el("circle", { r: 4, fill: "var(--ink)", stroke: "var(--surface)", "stroke-width": 2, visibility: "hidden" }, svg);
+  const hit = el("rect", { x: ml, y: mt, width: W - ml - mr, height: H - mt - mb, fill: "transparent" }, svg);
+  const tip = $("#tip", box) || Object.assign(document.createElement("div"), { className: "tip", id: "tip" });
+
+  box.querySelectorAll("svg").forEach(s => s.remove());
+  box.appendChild(svg);
+  if (!tip.parentNode) box.appendChild(tip);
+
+  const move = ev => {
+    const rect = svg.getBoundingClientRect(), px = (ev.clientX - rect.left) * W / rect.width;
+    let i = Math.round((px - ml) / ((W - ml - mr) / Math.max(1, n - 1)));
+    i = Math.max(0, Math.min(n - 1, i));
+    // 가까운 이상 샘플로 스냅 (작은 마커를 맞추기 쉽게)
+    for (let k = 1; k <= 3 && !at.has(i); k++) { if (at.has(i - k)) { i -= k; break; } if (at.has(i + k)) { i += k; break; } }
+    cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible");
+    dot.setAttribute("cx", x(i)); dot.setAttribute("cy", y(vals[i])); dot.setAttribute("visibility", "visible");
+    tip.innerHTML = `<div class="muted num">${esc(ts[i] ? String(ts[i]).replace("T", " ") : "#" + i)}</div>
+      <div><b class="num">${fmt(vals[i], hi)}</b> ${esc(m.unit)}</div>${(at.get(i) || []).map(l => `<div class="ink2">${esc(l)}</div>`).join("")}`;
+    tip.style.display = "block";
+    const left = x(i) * rect.width / W, tw = tip.offsetWidth;
+    tip.style.left = Math.min(Math.max(0, left + 12 + tw > rect.width ? left - tw - 12 : left + 12), rect.width - tw) + "px";
+    tip.style.top = "8px";
+  };
+  hit.addEventListener("pointermove", move);
+  hit.addEventListener("pointerleave", () => { tip.style.display = "none"; cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); });
+
+  // legend (always shown, shape + color)
+  const sw = (shape, color) => {
+    const s = `<svg width="14" height="14" viewBox="0 0 14 14">`;
+    const ring = `stroke="var(--surface)" stroke-width="1.5" fill="${color}"`;
+    if (shape === "circle") return s + `<circle cx="7" cy="7" r="5" ${ring}/></svg>`;
+    if (shape === "square") return s + `<rect x="2" y="2" width="10" height="10" rx="1.5" ${ring}/></svg>`;
+    if (shape === "triangle") return s + `<path d="M7 1.5 12.5 12H1.5Z" ${ring}/></svg>`;
+    if (shape === "diamond") return s + `<path d="M7 1 13 7 7 13 1 7Z" ${ring}/></svg>`;
+  };
+  $("#legend").innerHTML =
+    `<span><svg width="18" height="10"><path d="M1 5h16" stroke="var(--ink-2)" stroke-width="1.5"/></svg>측정값</span>` +
+    Object.values(METHOD).map(s => `<span>${sw(s.shape, s.color)}${esc(s.label)}</span>`).join("") +
+    `<span>${sw("diamond", "var(--st-crit)")}스펙 이탈</span>` +
+    `<span><svg width="14" height="10"><rect width="14" height="10" fill="var(--band)"/></svg>Stuck 구간</span>` +
+    `<span><svg width="18" height="10"><path d="M1 5h16" stroke="var(--st-crit)" stroke-dasharray="4 3"/></svg>LSL/USL</span>`;
+}
+
+/* ---------------- chat (서버가 MCP 클라이언트로 tool을 실행) ---------------- */
+const chat = { cid: null, busy: false, ctrl: null, msgs: [], ids: [] };
+const TOOL_KO = {
+  get_monitor_status: "모니터링 현황 조회", list_alarm_events: "알람 이벤트 조회", check_sensor: "센서 점검",
+  detect_multivariate: "다변량 탐지", analyze_with_claude: "Claude 원인 분석", detect_anomalies: "이상 탐지",
+  list_methods: "탐지기 목록 조회",
+};
+const SUGGEST = [
+  "지금 알람·경고 상태인 센서와 그 이유를 정리해줘",
+  "최근 이벤트 중 가장 심각한 것부터 알려줘",
+  "ETCH-03 CH-A 센서들 사이 상관관계에 이상이 있어?",
+  "보고 있는 센서를 자세히 점검하고 의심 원인을 알려줘",
+];
+
+function setChatOpen(open) {
+  document.documentElement.classList.toggle("chat-docked", open);
+  try { localStorage.setItem("chatOpen", open ? "1" : "0"); } catch (e) {}
+  if (open) setTimeout(() => $("#chatText").focus(), 0);
+  if (detail) drawDetail(detail);
+}
+{
+  let open = innerWidth > 900;
+  try { const v = localStorage.getItem("chatOpen"); if (v !== null) open = v === "1" && innerWidth > 900; } catch (e) {}
+  setChatOpen(open);
+}
+$("#btnChat").onclick = () => setChatOpen(!document.documentElement.classList.contains("chat-docked"));
+$("#chatFab").onclick = () => setChatOpen(true);
+$("#chatClose").onclick = () => setChatOpen(false);
+$("#chatNew").onclick = () => {
+  if (chat.ctrl) chat.ctrl.abort();
+  if (chat.cid) api("/api/chat/reset", { conversation_id: chat.cid }).catch(() => {});
+  chat.cid = null; chat.msgs = []; renderChat();
+};
+
+function updateChatMeta() {
+  const c = overview && overview.chat;
+  $("#chatMeta").textContent = !c ? "" : c.available ? `MCP · ${c.model}` : "ANTHROPIC_API_KEY 필요";
+  $("#chatCtx").textContent = selected ? `보고 있는 센서: ${selected}` : "";
+  chat.ids = overview ? overview.sensors.map(x => x.sensor_id) : [];
+  $("#chatSend").disabled = !chat.busy && !(c && c.available);
+  $("#chatSend").textContent = chat.busy ? "중지" : "전송";
+}
+
+/* 최소 마크다운: 코드블록, 표, 제목, 목록, 굵게, 인라인 코드 (입력은 먼저 escape) */
+function inline(t) {
+  return t.replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+}
+function md(src) {
+  const out = [], lines = esc(src).split("\n");
+  const isList = l => /^\s*([-*]|\d+\.)\s+/.test(l);
+  const isRow = l => /^\s*\|.*\|\s*$/.test(l);
+  let i = 0;
+  while (i < lines.length) {
+    const l = lines[i];
+    if (/^```/.test(l)) {
+      const buf = []; i++;
+      while (i < lines.length && !/^```/.test(lines[i])) buf.push(lines[i++]);
+      i++; out.push(`<pre><code>${buf.join("\n")}</code></pre>`); continue;
+    }
+    if (isRow(l) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])) {
+      const cells = r => r.trim().replace(/^\||\|$/g, "").split("|").map(c => inline(c.trim()));
+      const head = cells(l), rows = []; i += 2;
+      while (i < lines.length && isRow(lines[i])) rows.push(cells(lines[i++]));
+      out.push(`<table><thead><tr>${head.map(h => `<th>${h}</th>`).join("")}</tr></thead><tbody>${
+        rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table>`);
+      continue;
+    }
+    const h = l.match(/^#{1,4}\s+(.*)/);
+    if (h) { out.push(`<h4>${inline(h[1])}</h4>`); i++; continue; }
+    if (isList(l)) {
+      const ordered = /^\s*\d+\./.test(l), items = [];
+      while (i < lines.length && isList(lines[i])) items.push(inline(lines[i++].replace(/^\s*([-*]|\d+\.)\s+/, "")));
+      const tag = ordered ? "ol" : "ul";
+      out.push(`<${tag}>${items.map(x => `<li>${x}</li>`).join("")}</${tag}>`);
+      continue;
+    }
+    if (!l.trim()) { i++; continue; }
+    const para = [inline(lines[i++])];
+    while (i < lines.length && lines[i].trim() && !/^(```|#{1,4}\s)/.test(lines[i]) && !isList(lines[i]) && !isRow(lines[i])) para.push(inline(lines[i++]));
+    out.push(`<p>${para.join("<br>")}</p>`);
+  }
+  let html = out.join("");
+  if (chat.ids.length) {   // 센서 ID → 클릭하면 상세 열기
+    const re = new RegExp(`\\b(${chat.ids.map(x => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\b`, "g");
+    html = html.replace(re, m => `<a class="sid-link" data-sid="${m}">${m}</a>`);
+  }
+  return html;
+}
+
+function toolArg(input) {
+  if (!input || typeof input !== "object") return "";
+  if (input.sensor_id) return input.sensor_id;
+  if (input.sensor_ids) return input.sensor_ids.join(", ");
+  if (input.min_status) return `${input.min_status} 이상`;
+  return "";
+}
+
+function renderChat() {
+  const log = $("#chatLog");
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+  if (!chat.msgs.length) {
+    log.innerHTML = `<div class="suggest"><div class="hint">대시보드의 센서·알람 데이터를 MCP tool로 조회해서 답합니다.</div>${
+      SUGGEST.map(q => `<button type="button" data-q="${esc(q)}">${esc(q)}</button>`).join("")}</div>`;
+    log.querySelectorAll("[data-q]").forEach(b => b.onclick = () => sendChat(b.dataset.q));
+    return;
+  }
+  log.innerHTML = chat.msgs.map(m => {
+    if (m.role === "user") return `<div class="msg user">${esc(m.text)}</div>`;
+    const body = m.parts.map(p => p.kind === "text" ? md(p.text) :
+      `<div class="tool ${p.state}" title="${esc(JSON.stringify(p.input || {}))}"><i></i>${esc(TOOL_KO[p.name] || p.name)}${
+        toolArg(p.input) ? `<span class="arg">· ${esc(toolArg(p.input))}</span>` : ""}</div>`).join("");
+    const tail = m.error ? `<div class="msg err">${esc(m.error)}</div>`
+      : (m.pending && !m.parts.length ? '<div class="typing">생각 중…</div>' : "");
+    return `<div class="msg bot">${body}${tail}</div>`;
+  }).join("");
+  if (atBottom || chat.busy) log.scrollTop = log.scrollHeight;
+}
+
+let chatRaf = 0;
+const renderChatSoon = () => { if (!chatRaf) chatRaf = requestAnimationFrame(() => { chatRaf = 0; renderChat(); }); };
+
+async function sendChat(text) {
+  text = (text || "").trim();
+  if (!text || chat.busy) return;
+  chat.msgs.push({ role: "user", text });
+  const bot = { role: "bot", parts: [], pending: true };
+  chat.msgs.push(bot);
+  chat.busy = true; chat.ctrl = new AbortController();
+  $("#chatText").value = ""; $("#chatText").style.height = "auto";
+  updateChatMeta(); renderChat();
+  const lastText = () => {
+    let p = bot.parts[bot.parts.length - 1];
+    if (!p || p.kind !== "text") bot.parts.push(p = { kind: "text", text: "" });
+    return p;
+  };
+  const tool = (id, name) => {
+    let t = bot.parts.find(p => p.kind === "tool" && p.id === id);
+    if (!t) bot.parts.push(t = { kind: "tool", id, name, state: "run" });
+    return t;
+  };
+  try {
+    const r = await fetch("/api/chat", {
+      method: "POST", headers: { "Content-Type": "application/json" }, signal: chat.ctrl.signal,
+      body: JSON.stringify({ message: text, conversation_id: chat.cid, selected_sensor: selected }),
+    });
+    if (!r.ok) throw new Error((await r.json()).error || r.statusText);
+    const reader = r.body.getReader(), dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let k;
+      while ((k = buf.indexOf("\n\n")) >= 0) {
+        const line = buf.slice(0, k); buf = buf.slice(k + 2);
+        if (!line.startsWith("data: ")) continue;
+        const ev = JSON.parse(line.slice(6));
+        if (ev.type === "start") chat.cid = ev.conversation_id;
+        else if (ev.type === "text") lastText().text += ev.text;
+        else if (ev.type === "tool_pending") tool(ev.id, ev.name);
+        else if (ev.type === "tool_start") { const t = tool(ev.id, ev.name); t.input = ev.input; t.state = "run"; }
+        else if (ev.type === "tool_end") tool(ev.id, ev.name).state = ev.ok ? "ok" : "fail";
+        else if (ev.type === "error") bot.error = ev.message;
+        renderChatSoon();
+      }
+    }
+  } catch (e) {
+    bot.error = e.name === "AbortError" ? "중지했습니다." : e.message;
+  }
+  bot.pending = false; chat.busy = false; chat.ctrl = null;
+  bot.parts.forEach(p => { if (p.state === "run") p.state = "fail"; });
+  updateChatMeta(); renderChat();
+  refresh();   // 채팅 중 실행된 분석 결과 등을 대시보드에 반영
+}
+
+$("#chatForm").onsubmit = e => {
+  e.preventDefault();
+  if (chat.busy) { if (chat.ctrl) chat.ctrl.abort(); return; }
+  sendChat($("#chatText").value);
+};
+$("#chatText").addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("#chatForm").requestSubmit(); }
+});
+$("#chatText").addEventListener("input", e => {
+  e.target.style.height = "auto"; e.target.style.height = Math.min(160, e.target.scrollHeight) + "px";
+});
+renderChat();
+
+let resizeT;
+addEventListener("resize", () => { clearTimeout(resizeT); resizeT = setTimeout(() => detail && drawDetail(detail), 120); });
+
+if (location.hash.startsWith("#s=")) openDetail(decodeURIComponent(location.hash.slice(3)));
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

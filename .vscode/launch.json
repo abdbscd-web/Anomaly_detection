@@ -1,0 +1,32 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Dashboard + MCP (시뮬레이터)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "anomaly_mcp.dashboard",
+      "args": ["--port", "8000"],
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Dashboard + MCP (실데이터, 시뮬레이터 끔)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "anomaly_mcp.dashboard",
+      "args": ["--port", "8000", "--no-simulator"],
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "샘플 데이터 예제",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/examples/load_sample_data.py",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal"
+    }
+  ]
+}
